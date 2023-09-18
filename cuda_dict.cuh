@@ -125,7 +125,9 @@ struct HashTable { // On device view
 						status = insert_result::HT_SUCCESS;
 					} else if (old_k == k) {
 						// else, re-check if a duplicate key has been inserted at the current probing position
-						/// TODO: update value in this case
+						/// TODO: update value in this case, need to move the check before empty_mask
+						/// FIXME: There is a bug here, if the group buckets are full but contains the key,
+						/// then we will skip this key and store this key again in another bucket.
 						// buckets[i].compare_exchange_strong();
 						status = insert_result::HT_DUPLICATE;
 					}
@@ -175,8 +177,12 @@ struct CUDA_Dict {
 	uint32_t size;
 	uint32_t capacity;
 	TItem *buckets;
+	TKey sentinel_key;
+	TVal sentinel_val;
 	
-	CUDA_Dict(const std::vector<TItem> &data) {
+	CUDA_Dict(const std::vector<TItem> &data,
+			TKey sentinel_key, TVal sentinel_val)
+	: sentinel_key(sentinel_key), sentinel_val(sentinel_val) {
 		auto n = data.size();
 		this->size = n;
 		this->capacity = 2 * n;
@@ -184,13 +190,13 @@ struct CUDA_Dict {
 
 		auto const grid_size = (capacity + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
 		initialize_ht<BLOCK_SIZE>
-			<<<1, BLOCK_SIZE>>>(hashtable_view());
+			<<<grid_size, BLOCK_SIZE>>>(hashtable_view());
 
 		this->update(data);
 	}
 
 	auto hashtable_view() {
-		return HashTable(2 * this->size, buckets, EmptyKey(TKey(-1)), EmptyVal(TVal(-1)));
+		return HashTable(2 * this->size, buckets, EmptyKey(sentinel_key), EmptyVal(sentinel_val));
 	}
 
 	void update(const std::vector<TItem> &data) {
