@@ -1,0 +1,11 @@
+.vscode/
+build/
+
+code-samples/
+
+*.so
+*.o
+*.exe
+
+*.swp
+
