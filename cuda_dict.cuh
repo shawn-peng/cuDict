@@ -6,10 +6,13 @@
 #include <iostream>
 // #include "cuda_dict"
 #include <cuda/std/atomic>
+#include <cooperative_groups.h>
 
 #include "utils.cuh"
-// #include "cuda_array.cuh"
 #include "cuda_tuple.cuh"
+
+
+namespace cg = cooperative_groups;
 
 
 template <typename TKey, typename TVal>
@@ -71,11 +74,18 @@ struct EmptyVal : public StrongType<T> {
 	EmptyVal(T x) : StrongType<T>(x) {}
 };
 
+const uint16_t CG_Size = 4;
 
 template <typename TKey, typename TVal>
 struct HashTable { // On device view
 	using TItem = Tuple<TKey, TVal>;
 	using TBuk = cuda::std::atomic<TItem>;
+	
+	enum class insert_result {
+		HT_CONTINUE,	///< Insert did not succeed, continue trying to insert
+		HT_SUCCESS,	///< New pair inserted successfully
+		HT_DUPLICATE	///< Insert did not succeed, key is already present
+	};
 
 	uint32_t capacity;
 	TBuk *buckets;
@@ -86,32 +96,48 @@ struct HashTable { // On device view
 	: capacity(capacity), buckets((TBuk *)buckets), sentinel{sentinel_key, sentinel_value}
 	{}
 
-	__device__ bool update_item(TItem item) { /// Idea from cuColllecitons
+	template <uint16_t GroupSize>
+	__device__ bool update_item(cg::thread_block_tile<GroupSize> group, TItem item) { /// Idea from cuColllecitons
 		auto &[k, v] = item;
 		// get initial probing position from the hash value of the key
-		auto i = tuple_hash(k, capacity);
+		auto i = (tuple_hash(k, capacity) + group.thread_rank()) % capacity;
+		insert_result status{insert_result::HT_CONTINUE};
 		while (true) {
 			// load the content of the bucket at the current probe position
 			auto old_item = buckets[i].load(cuda::std::memory_order_relaxed);
 			auto [old_k, old_v] = old_item;
+			// input key is already present in the map
+			if (group.any(old_k == k)) return false;
+
+			// each rank checks if its current bucket is empty, i.e., a candidate bucket for insertion
+			auto const empty_mask = group.ballot(old_item == sentinel);
+
 			// if the bucket is empty we can attempt to insert the pair
-			if (old_item == sentinel) {
-				// try to atomically replace the current content of the bucket with the input pair
-				bool success = buckets[i].compare_exchange_strong(
-								old_item, item, cuda::std::memory_order_relaxed);
-				if (success) {
-					// store was successful
-					return true;
+			if(empty_mask) {
+				// elect a candidate rank (here: thread with lowest rank in mask)
+				auto const candidate = __ffs(empty_mask) - 1;
+				if(group.thread_rank() == candidate) {
+					// attempt atomically swapping the input pair into the bucket
+					bool const success = buckets[i].compare_exchange_strong(
+													old_item, item, cuda::std::memory_order_relaxed);
+					if (success) {
+						// insertion went successful
+						status = insert_result::HT_SUCCESS;
+					} else if (old_k == k) {
+						// else, re-check if a duplicate key has been inserted at the current probing position
+						/// TODO: update value in this case
+						// buckets[i].compare_exchange_strong();
+						status = insert_result::HT_DUPLICATE;
+					}
 				}
-				// failed in racing, try next bucket
-			} else if (old_k == k) {
-				// input key is already present in the map
-				return false;
+				// broadcast the insertion result from the candidate rank to all other ranks
+				auto const candidate_status = group.shfl(status, candidate);
+				if(candidate_status == insert_result::HT_SUCCESS) return true;
+				if(candidate_status == insert_result::HT_DUPLICATE) return false;
+			} else {
+				// else, move to the next (linear) probing window
+				i = (i + group.size()) % capacity;
 			}
-			// if the bucket was already occupied move to the next (linear) probing position
-			// using the modulo operator to wrap back around to the beginning if we
-			// go beyond the capacity
-			i = ++i % capacity;
 		}
 	}
 
@@ -129,13 +155,15 @@ __global__ void initialize_ht(HashTable<TKey, TVal> ht) {
 
 template <
 	uint32_t BlockSize,
+	uint32_t GroupSize, // Size of a cooperative group to update one item in parallel
 	typename TKey,
 	typename TVal>
 __global__ void update_items(HashTable<TKey, TVal> ht, uint32_t n, Tuple<TKey, TVal> *new_data) {
-	auto i = BlockSize * blockIdx.x + threadIdx.x;
+	auto tile = cg::tiled_partition<GroupSize>(cg::this_thread_block());
+	auto i = (BlockSize * blockIdx.x + threadIdx.x) / GroupSize;
 	if (i >= n) return;
 	auto item = new_data[i];
-	ht.update_item(item);
+	ht.update_item<GroupSize>(tile, item);
 }
 
 const uint16_t BLOCK_SIZE = 256;
@@ -147,7 +175,6 @@ struct CUDA_Dict {
 	uint32_t size;
 	uint32_t capacity;
 	TItem *buckets;
-	// HashTable<TKey, TVal> *ht;
 	
 	CUDA_Dict(const std::vector<TItem> &data) {
 		auto n = data.size();
@@ -163,7 +190,6 @@ struct CUDA_Dict {
 	}
 
 	auto hashtable_view() {
-		// return HashTable(2 * this->size, buckets, TKey(-1), TVal(-1));
 		return HashTable(2 * this->size, buckets, EmptyKey(TKey(-1)), EmptyVal(TVal(-1)));
 	}
 
@@ -174,7 +200,7 @@ struct CUDA_Dict {
 		cudaMemcpy(temp_data, data.data(), n * sizeof(TItem), cudaMemcpyHostToDevice);
 		cudaFree(temp_data);
 		auto const grid_size = (capacity + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
-		update_items<BLOCK_SIZE>
+		update_items<BLOCK_SIZE, CG_Size>
 			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, temp_data);
 	}
 
