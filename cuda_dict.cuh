@@ -344,37 +344,19 @@ struct CUDA_Dict {
 
 	void update(const std::vector<TItem> &data) {
 		auto n = data.size();
-		// TItem *temp_data;
-		// cudaMalloc(&temp_data, n * sizeof(TItem));
-		TItem *temp_data = cuMalloc<TItem>(n);
-		cuda_ret = cudaMemcpy(temp_data, data.data(), n * sizeof(TItem), cudaMemcpyHostToDevice);
-		gpuErrchk(cuda_ret);
+		auto dev_in = DevVec(data);
 		auto const grid_size = (n + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
 		update_items<BLOCK_SIZE, CG_SIZE>
-			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, temp_data);
-		cudaFree(temp_data);
+			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, dev_in.p);
 	}
 
-	void dump_data(std::vector<TItem> &data) const {
-		data.resize(2 * this->size);
+	std::vector<TItem> dump_data() const {
+		auto dev_out = DevVec<TItem>(2 * this->size);
 		auto const grid_size = (capacity + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
-		TItem *temp_data = cuMalloc<TItem>(capacity);
-		// cudaMalloc(&temp_data, capacity * sizeof(TItem));
 		::dump_data<BLOCK_SIZE>
-			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), temp_data);
-		cudaMemcpy(data.data(), temp_data, capacity * sizeof(TItem), cudaMemcpyDeviceToHost);
-		cudaFree(temp_data);
+			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), dev_out.p);
+		return dev_out;
 	}
-
-	// auto contains_items(const std::initializer_list<TKey> &arg) {
-	// 	auto keys = std::vector<TKey>(arg);
-	// 	return contains_items(keys);
-	// }
-
-	// auto get_items(const std::initializer_list<TKey> &arg) {
-	// 	auto keys = std::vector<TKey>(arg);
-	// 	return get_items(keys);
-	// }
 
 	auto contains_items(const std::vector<TKey> &keys) {
 		using T = int;
@@ -406,16 +388,12 @@ struct CUDA_Dict {
 template <typename TKey, typename TVal>
 std::ostream &operator << (std::ostream &os, const CUDA_Dict<TKey, TVal> &d) {
 	std::vector<Tuple<TKey, TVal>> dict_data;
-	d.dump_data(dict_data);
+	dict_data = d.dump_data();
 
 	os << "{ CUDA_Dict" << std::endl;
 	for (int i = 0; i < dict_data.size(); i++) {
-		// os << "  " << dict_data[i].at<0>() << ": " << dict_data[i].at<1>() << std::endl;
 		auto elem = dict_data[i];
-		// std::remove_reference<decltype(elem.at<0>())>::something x;
 		auto [k, v] = elem;
-		// auto k = elem.at<0>();
-		// auto v = elem.at<1>();
 		os << "  " << k << ": " << v << std::endl;
 	}
 	os << "}" << std::endl;

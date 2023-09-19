@@ -1,0 +1,44 @@
+#include <vector>
+#include <cstdint>
+#include <iostream>
+
+
+template <typename T>
+struct DevVec {
+	T *p;
+	uint32_t n;
+	DevVec(uint32_t n);
+	DevVec(const std::vector<T> &src);
+	auto ToHost();
+	~DevVec();
+
+	operator T*();
+	operator std::vector<T>();
+};
+
+
+template <typename TKey, typename TVal>
+struct CUDA_Dict;
+
+template<typename TKey, typename TVal> // declaration
+std::ostream& operator<<(std::ostream&, const CUDA_Dict<TKey, TVal>&);
+
+template <typename TKey, typename TVal>
+struct CUDA_Dict {
+	using TItem = Tuple<TKey, TVal>;
+	using TBuk = cuda::std::atomic<TItem>;
+
+	uint32_t size;
+	uint32_t capacity;
+	TBuk *buckets;
+	TKey sentinel_key;
+	TVal sentinel_val;
+	
+	CUDA_Dict(const std::vector<TItem> &data,
+			TKey sentinel_key, TVal sentinel_val);
+	void update(const std::vector<TItem> &data);
+	void dump_data(std::vector<TItem> &data) const;
+	auto contains_items(const std::vector<TKey> &keys);
+	auto get_items(const std::vector<TKey> &keys);
+	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Dict&);
+
