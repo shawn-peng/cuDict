@@ -33,6 +33,8 @@ __device__ uint32_t hash(T x) {
 	return x % 999983;
 }
 
+static cudaError_t cuda_ret;
+
 // template <class T>
 // struct show_type;
 
@@ -76,8 +78,6 @@ template <typename T>
 struct EmptyVal : public StrongType<T> {
 	EmptyVal(T x) : StrongType<T>(x) {}
 };
-
-const uint16_t CG_Size = 4;
 
 
 template <typename TKey, typename TVal>
@@ -145,8 +145,8 @@ struct HashTable { // On device view
 		}
 	}
 	
-	template <uint16_t GroupSize>
-	__device__ bool contains_item(cg::thread_block_tile<GroupSize> group, TKey k) {
+	template <uint16_t GroupSize, typename TRet = bool>
+	__device__ TRet contains_item(cg::thread_block_tile<GroupSize> group, TKey k) const {
 		// get initial probing position from the hash value of the key
 		auto i = (tuple_hash(k, capacity) + group.thread_rank()) % capacity;
 		while (true) {
@@ -171,7 +171,7 @@ struct HashTable { // On device view
 	}
 	
 	template <uint16_t GroupSize>
-	__device__ TVal get_item(cg::thread_block_tile<GroupSize> group, TKey k) {
+	__device__ TVal get_item(cg::thread_block_tile<GroupSize> group, const TKey k) const {
 		// get initial probing position from the hash value of the key
 		auto i = (tuple_hash(k, capacity) + group.thread_rank()) % capacity;
 		while (true) {
@@ -180,7 +180,8 @@ struct HashTable { // On device view
 			auto old_item = bucket.load(cuda::std::memory_order_relaxed);
 			auto [old_k, old_v] = old_item;
 			// input key is present in the map
-			if (group.any(old_k == k)) return old_v;
+			if (group.any(old_k == k))
+				return old_v;
 
 			// each rank checks if its current bucket is empty, i.e., a candidate bucket for insertion
 			auto const empty_mask = group.ballot(old_item == sentinel);
@@ -211,56 +212,99 @@ __global__ void initialize_ht(HashTable<TKey, TVal> ht) {
 
 template <
 	uint32_t BlockSize,
+	typename TKey,
+	typename TVal>
+__global__ void dump_data(const HashTable<TKey, TVal> ht, Tuple<TKey, TVal> *dest) {
+	auto i = BlockSize * blockIdx.x + threadIdx.x;
+	if (i >= ht.capacity) return;
+	dest[i] = ht.buckets[i].load(cuda::std::memory_order_relaxed);
+}
+
+template <
+	uint32_t BlockSize,
 	uint32_t GroupSize, // Size of a cooperative group to update one item in parallel
 	typename TKey,
 	typename TVal>
-__global__ void update_items(HashTable<TKey, TVal> ht, uint32_t n, Tuple<TKey, TVal> *new_data) {
+__global__ void update_items(HashTable<TKey, TVal> ht, uint32_t n, Tuple<TKey, TVal> *items) {
 	auto tile = cg::tiled_partition<GroupSize>(cg::this_thread_block());
 	auto i = (BlockSize * blockIdx.x + threadIdx.x) / GroupSize;
 	if (i >= n) return;
-	auto item = new_data[i];
-	ht.update_item<GroupSize>(tile, item);
+	ht.update_item<GroupSize>(tile, items[i]);
 }
 
 template <
 	uint32_t BlockSize,
+	uint32_t GroupSize,
 	typename TKey,
-	typename TVal>
-__global__ void contains_items(const HashTable<TKey, TVal> ht, uint32_t n, TKey *items, bool *dest) {
-	auto i = BlockSize * blockIdx.x + threadIdx.x;
+	typename TVal,
+	typename TRet = bool>
+__global__ void contains_items(const HashTable<TKey, TVal> ht, uint32_t n, const TKey *keys, TRet *dest) {
+	auto tile = cg::tiled_partition<GroupSize>(cg::this_thread_block());
+	auto i = (BlockSize * blockIdx.x + threadIdx.x) / GroupSize;
 	if (i >= n) return;
-	dest[i] = ht.contains_item(items[i]);
+	dest[i] = ht.contains_item<GroupSize>(tile, keys[i]);
 }
 
 template <
 	uint32_t BlockSize,
+	uint32_t GroupSize,
 	typename TKey,
 	typename TVal>
-__global__ void get_items(const HashTable<TKey, TVal> ht, TVal *dest) {
-	auto i = BlockSize * blockIdx.x + threadIdx.x;
-	if (i >= ht.capacity) return;
-	dest[i] = ht.buckets[i].load(cuda::std::memory_order_relaxed);
-}
-
-template <
-	uint32_t BlockSize,
-	typename TKey,
-	typename TVal>
-__global__ void copy_data(const HashTable<TKey, TVal> ht, Tuple<TKey, TVal> *dest) {
-	auto i = BlockSize * blockIdx.x + threadIdx.x;
-	if (i >= ht.capacity) return;
-	dest[i] = ht.buckets[i].load(cuda::std::memory_order_relaxed);
+__global__ void get_items(const HashTable<TKey, TVal> ht, uint32_t n, const TKey *keys, TVal *dest) {
+	auto tile = cg::tiled_partition<GroupSize>(cg::this_thread_block());
+	auto i = (BlockSize * blockIdx.x + threadIdx.x) / GroupSize;
+	if (i >= n) return;
+	dest[i] = ht.get_item<GroupSize>(tile, keys[i]);
 }
 
 template <typename T>
 constexpr T *cuMalloc(const uint32_t n) {
 	T *p;
-	cudaMalloc(&p, n * sizeof(T));
+	auto ret = cudaMalloc(&p, n * sizeof(T));
+	gpuErrchk(ret);
 	return p;
 }
 
+template <typename T>
+constexpr auto cuToDev(const std::vector<T> &host) {
+	T *p = cuMalloc<T>(host.size());
+	cudaMemcpy(p, host.data(), host.size() * sizeof(T), cudaMemcpyHostToDevice);
+	return p;
+}
+
+template <typename T>
+constexpr auto cuToHost(uint32_t n, const T *p) {
+	auto host = std::vector<T>(n);
+	cudaMemcpy(host.data(), p, host.size() * sizeof(T), cudaMemcpyDeviceToHost);
+	return host;
+}
+
+template <typename T>
+constexpr auto cuDel(T *p) { cudaFree(p); }
+
+template <typename T>
+struct DevVec {
+	T *p;
+	uint32_t n;
+	DevVec(uint32_t n) : n(n) {
+		p = cuMalloc<T>(n);
+	}
+	DevVec(const std::vector<T> &src) {
+		p = cuToDev(src);
+	}
+	auto ToHost() {
+		return cuToHost(n, p);
+	}
+	~DevVec() { cuDel(p); }
+
+	operator T*() { return p; }
+	operator std::vector<T>() { return ToHost(); }
+};
+
 
 const uint16_t BLOCK_SIZE = 256;
+
+const uint16_t CG_SIZE = 4;
 
 template <typename TKey, typename TVal>
 struct CUDA_Dict {
@@ -300,25 +344,60 @@ struct CUDA_Dict {
 
 	void update(const std::vector<TItem> &data) {
 		auto n = data.size();
-		TItem *temp_data;
-		cudaMalloc(&temp_data, n * sizeof(TItem));
-		cudaMemcpy(temp_data, data.data(), n * sizeof(TItem), cudaMemcpyHostToDevice);
+		// TItem *temp_data;
+		// cudaMalloc(&temp_data, n * sizeof(TItem));
+		TItem *temp_data = cuMalloc<TItem>(n);
+		cuda_ret = cudaMemcpy(temp_data, data.data(), n * sizeof(TItem), cudaMemcpyHostToDevice);
+		gpuErrchk(cuda_ret);
 		auto const grid_size = (n + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
-		update_items<BLOCK_SIZE, CG_Size>
+		update_items<BLOCK_SIZE, CG_SIZE>
 			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, temp_data);
 		cudaFree(temp_data);
 	}
 
-	void get_data(std::vector<TItem> &data) const {
+	void dump_data(std::vector<TItem> &data) const {
 		data.resize(2 * this->size);
 		auto const grid_size = (capacity + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
 		TItem *temp_data = cuMalloc<TItem>(capacity);
 		// cudaMalloc(&temp_data, capacity * sizeof(TItem));
-		copy_data<BLOCK_SIZE>
+		::dump_data<BLOCK_SIZE>
 			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), temp_data);
 		cudaMemcpy(data.data(), temp_data, capacity * sizeof(TItem), cudaMemcpyDeviceToHost);
 		cudaFree(temp_data);
 	}
+
+	// auto contains_items(const std::initializer_list<TKey> &arg) {
+	// 	auto keys = std::vector<TKey>(arg);
+	// 	return contains_items(keys);
+	// }
+
+	// auto get_items(const std::initializer_list<TKey> &arg) {
+	// 	auto keys = std::vector<TKey>(arg);
+	// 	return get_items(keys);
+	// }
+
+	auto contains_items(const std::vector<TKey> &keys) {
+		using T = int;
+		auto n = keys.size();
+		auto dev_in = DevVec(keys);
+		auto dev_out = DevVec<T>(n);
+		auto const grid_size = (n + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
+		::contains_items<BLOCK_SIZE, CG_SIZE>
+			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, dev_in.p, dev_out.p);
+		return dev_out.ToHost();
+	}
+
+	auto get_items(const std::vector<TKey> &keys) {
+		using T = TVal;
+		auto n = keys.size();
+		auto dev_in = DevVec(keys);
+		auto dev_out = DevVec<T>(n);
+		auto const grid_size = (n + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
+		::get_items<BLOCK_SIZE, CG_SIZE>
+			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), n, dev_in.p, dev_out.p);
+		return dev_out.ToHost();
+	}
+
 
 	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Dict&);
 
@@ -327,7 +406,7 @@ struct CUDA_Dict {
 template <typename TKey, typename TVal>
 std::ostream &operator << (std::ostream &os, const CUDA_Dict<TKey, TVal> &d) {
 	std::vector<Tuple<TKey, TVal>> dict_data;
-	d.get_data(dict_data);
+	d.dump_data(dict_data);
 
 	os << "{ CUDA_Dict" << std::endl;
 	for (int i = 0; i < dict_data.size(); i++) {
