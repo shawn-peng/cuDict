@@ -144,6 +144,58 @@ struct HashTable { // On device view
 			}
 		}
 	}
+	
+	template <uint16_t GroupSize>
+	__device__ bool contains_item(cg::thread_block_tile<GroupSize> group, TKey k) {
+		// get initial probing position from the hash value of the key
+		auto i = (tuple_hash(k, capacity) + group.thread_rank()) % capacity;
+		while (true) {
+			auto &bucket = buckets[i];
+			// load the content of the bucket at the current probe position
+			auto old_item = bucket.load(cuda::std::memory_order_relaxed);
+			auto [old_k, old_v] = old_item;
+			// input key is present in the map
+			if (group.any(old_k == k)) return true;
+
+			// each rank checks if its current bucket is empty, i.e., a candidate bucket for insertion
+			auto const empty_mask = group.ballot(old_item == sentinel);
+
+			// if the bucket is empty we don't have the k in the hash map
+			if (empty_mask) {
+				return false;
+			}
+
+			// move to the next (linear) probing window
+			i = (i + group.size()) % capacity;
+		}
+	}
+	
+	template <uint16_t GroupSize>
+	__device__ TVal get_item(cg::thread_block_tile<GroupSize> group, TKey k) {
+		// get initial probing position from the hash value of the key
+		auto i = (tuple_hash(k, capacity) + group.thread_rank()) % capacity;
+		while (true) {
+			auto &bucket = buckets[i];
+			// load the content of the bucket at the current probe position
+			auto old_item = bucket.load(cuda::std::memory_order_relaxed);
+			auto [old_k, old_v] = old_item;
+			// input key is present in the map
+			if (group.any(old_k == k)) return old_v;
+
+			// each rank checks if its current bucket is empty, i.e., a candidate bucket for insertion
+			auto const empty_mask = group.ballot(old_item == sentinel);
+
+			// if the bucket is empty we don't have the k in the hash map
+			if (empty_mask) {
+				// return sentinel.at<1>();
+				// return sentinel.rest.first;
+				return get<1>(sentinel);
+			}
+
+			// move to the next (linear) probing window
+			i = (i + group.size()) % capacity;
+		}
+	}
 
 };
 
@@ -174,10 +226,37 @@ template <
 	uint32_t BlockSize,
 	typename TKey,
 	typename TVal>
-__global__ void get_items(const HashTable<TKey, TVal> ht, Tuple<TKey, TVal> *dest) {
+__global__ void contains_items(const HashTable<TKey, TVal> ht, uint32_t n, TKey *items, bool *dest) {
+	auto i = BlockSize * blockIdx.x + threadIdx.x;
+	if (i >= n) return;
+	dest[i] = ht.contains_item(items[i]);
+}
+
+template <
+	uint32_t BlockSize,
+	typename TKey,
+	typename TVal>
+__global__ void get_items(const HashTable<TKey, TVal> ht, TVal *dest) {
 	auto i = BlockSize * blockIdx.x + threadIdx.x;
 	if (i >= ht.capacity) return;
 	dest[i] = ht.buckets[i].load(cuda::std::memory_order_relaxed);
+}
+
+template <
+	uint32_t BlockSize,
+	typename TKey,
+	typename TVal>
+__global__ void copy_data(const HashTable<TKey, TVal> ht, Tuple<TKey, TVal> *dest) {
+	auto i = BlockSize * blockIdx.x + threadIdx.x;
+	if (i >= ht.capacity) return;
+	dest[i] = ht.buckets[i].load(cuda::std::memory_order_relaxed);
+}
+
+template <typename T>
+constexpr T *cuMalloc(const uint32_t n) {
+	T *p;
+	cudaMalloc(&p, n * sizeof(T));
+	return p;
 }
 
 
@@ -233,9 +312,9 @@ struct CUDA_Dict {
 	void get_data(std::vector<TItem> &data) const {
 		data.resize(2 * this->size);
 		auto const grid_size = (capacity + BLOCK_SIZE - 1/*Ceiling*/) / BLOCK_SIZE;
-		TItem *temp_data;
-		cudaMalloc(&temp_data, capacity * sizeof(TItem));
-		get_items<BLOCK_SIZE>
+		TItem *temp_data = cuMalloc<TItem>(capacity);
+		// cudaMalloc(&temp_data, capacity * sizeof(TItem));
+		copy_data<BLOCK_SIZE>
 			<<<grid_size, BLOCK_SIZE>>>(hashtable_view(), temp_data);
 		cudaMemcpy(data.data(), temp_data, capacity * sizeof(TItem), cudaMemcpyDeviceToHost);
 		cudaFree(temp_data);

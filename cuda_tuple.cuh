@@ -6,13 +6,36 @@
 
 #pragma pack(push)
 #pragma pack(1)
+template<uint32_t N, typename ... T>
+struct GetHelper { };
+
 template<typename ... T>
 class Tuple {
 public:
+    // template<uint32_t N, typename TRet>
+    // __host__ __device__ constexpr TRet &at();
+
     friend std::ostream &operator <<(std::ostream &os, const Tuple &t) {
         return os;
     }
 };
+
+template<typename T, typename ... Rest>
+struct GetHelper<0, T, Rest...> {
+    constexpr T &get(Tuple<T, Rest...> &x) { return x.first; }
+};
+
+template<uint32_t N, typename T, typename ... Rest>
+struct GetHelper<N, T, Rest...> {
+    constexpr T &get(Tuple<T, Rest...> &x) { return GetHelper<N-1>::get(x.rest); }
+};
+
+template<uint32_t N, typename ... T>
+auto &get(Tuple<T...> &x) {
+    return GetHelper<N, T...>().get(x);
+}
+
+
 
 template<typename T>
 class Tuple<T>
@@ -25,13 +48,13 @@ public:
     T first;
 
     template<uint32_t N>
-    __host__ __device__ constexpr auto &at() {
+    __host__ __device__ constexpr T &at() {
         static_assert(false);
         return first;
     }
 
     template<>
-    __host__ __device__ constexpr auto &at<0>() {
+    __host__ __device__ constexpr T &at<0>() {
         return first;
     }
 
@@ -82,7 +105,9 @@ public:
         return os;
     }
 };
+
 #pragma pack(pop)
+
 
 // template<uint32_t N, typename TFirst, typename ... TRest>
 // constexpr auto &TupleAt(Tuple<TFirst, TRest...> &tuple) {
