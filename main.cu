@@ -6,6 +6,11 @@
 
 const uint32_t Sentinel = -1;
 
+typedef Tuple<uint32_t> Tuple1;
+typedef Tuple<uint32_t, uint32_t> Tuple2;
+typedef Tuple<uint32_t, uint32_t, uint16_t> Tuple3;
+typedef Tuple<uint32_t, uint32_t, uint32_t, uint32_t> Tuple4;
+
 int main() {
     Tuple<int, uint16_t> t1 = {-2, 10};
     std::cout << "Tuple: (" << t1.at<0>() << ", " << t1.at<1>() << ")" << std::endl;
@@ -13,14 +18,14 @@ int main() {
     Tuple<Tuple<uint32_t>, uint32_t> t2 = {2, 10};
     std::cout << "Tuple: (" << t2.at<0>() << ", " << t2.at<1>() << ")" << std::endl;
 
-    auto dict_data = std::vector<Tuple<Tuple<uint32_t, uint32_t, uint32_t>, uint32_t>>{
+    auto dict_data = std::vector<Tuple<Tuple3, uint32_t>>{
         {{1, 2, 4}, 3},
         {{2, 3, 4}, 4},
         {{3, 4, 5}, 5},
         {{4, 5, 6}, 6},
         {{5, 5, 7}, 7},
         {{6, 9, 8}, 8}};
-    auto d = CUDA_Dict(dict_data, {Sentinel, Sentinel, Sentinel}, Sentinel);
+    auto d = CUDA_Dict(dict_data, {Sentinel, Sentinel, (uint16_t)Sentinel}, Sentinel);
     std::cout << d;
 
 
