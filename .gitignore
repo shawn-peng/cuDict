@@ -1,7 +1,7 @@
 .vscode/
 build/
 
-code-samples/
+code-samples
 
 *.so
 *.o
