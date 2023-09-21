@@ -7,18 +7,18 @@ Use case example
 ```CUDA
 const uint32_t Sentinel = -1;
 
-typedef Tuple<uint32_t> Tuple1;
+typedef Tuple<uint32_t, uint32_t, uint16_t> Tuple3;
 
 int main() {
     /// Saving data to GPU
-    auto dict_data = std::vector<Tuple<Tuple1, uint32_t>>{
+    auto dict_data = std::vector<Tuple<Tuple3, uint32_t>>{
         {{1, 2, 4}, 3},
         {{2, 3, 4}, 4},
         {{3, 4, 5}, 5},
         {{4, 5, 6}, 6},
         {{5, 5, 7}, 7},
         {{6, 9, 8}, 8}};
-    auto d = CUDA_Dict(dict_data, {Sentinel}, Sentinel);
+    auto d = CUDA_Static_Dict(dict_data, {Sentinel, Sentinel, (uint16_t)Sentinel}, Sentinel);
     std::cout << d;
 
     /// Checking whether items in the dictionary
