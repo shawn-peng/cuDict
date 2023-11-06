@@ -18,13 +18,13 @@ struct DevVec {
 
 
 template <typename TKey, typename TVal>
-struct CUDA_Dict;
+struct CUDA_Static_Dict;
 
 template<typename TKey, typename TVal> // declaration
-std::ostream& operator<<(std::ostream&, const CUDA_Dict<TKey, TVal>&);
+std::ostream& operator<<(std::ostream&, const CUDA_Static_Dict<TKey, TVal>&);
 
 template <typename TKey, typename TVal>
-struct CUDA_Dict {
+struct CUDA_Static_Dict {
 	using TItem = Tuple<TKey, TVal>;
 	using TBuk = cuda::std::atomic<TItem>;
 
@@ -34,11 +34,12 @@ struct CUDA_Dict {
 	TKey sentinel_key;
 	TVal sentinel_val;
 	
-	CUDA_Dict(const std::vector<TItem> &data,
+	CUDA_Static_Dict(const std::vector<TItem> &data,
 			TKey sentinel_key, TVal sentinel_val);
 	void update(const std::vector<TItem> &data);
-	void dump_data(std::vector<TItem> &data) const;
+	auto dump_data() const;
 	auto contains_items(const std::vector<TKey> &keys);
 	auto get_items(const std::vector<TKey> &keys);
-	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Dict&);
 
+	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Static_Dict&);
+};
