@@ -6,11 +6,13 @@ project(cuda_dict LANGUAGES CXX CUDA)
 
 set (CMAKE_CXX_STANDARD 20)
 
-add_executable(mymain main.cu)
+include_directories(include)
+
+add_executable(mymain src/main.cu)
 set_target_properties(mymain PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET mymain PROPERTY CUDA_ARCHITECTURES 70 80)
 
-add_library(cuda_dict cuda_dict.cu)
+add_library(cuda_dict src/cuda_dict.cu)
 set_target_properties(cuda_dict PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET cuda_dict PROPERTY CUDA_ARCHITECTURES 70 80)
 

@@ -307,7 +307,7 @@ const uint16_t BLOCK_SIZE = 256;
 const uint16_t CG_SIZE = 4;
 
 template <typename TKey, typename TVal>
-struct CUDA_Dict {
+struct CUDA_Static_Dict {
 	using TItem = Tuple<TKey, TVal>;
 	using TBuk = cuda::std::atomic<TItem>;
 
@@ -318,7 +318,7 @@ struct CUDA_Dict {
 	TKey sentinel_key;
 	TVal sentinel_val;
 	
-	CUDA_Dict(const std::vector<TItem> &data,
+	CUDA_Static_Dict(const std::vector<TItem> &data,
 			TKey sentinel_key, TVal sentinel_val)
 	: sentinel_key(sentinel_key), sentinel_val(sentinel_val) {
 		auto n = data.size();
@@ -381,16 +381,16 @@ struct CUDA_Dict {
 	}
 
 
-	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Dict&);
+	friend std::ostream& operator<< <> (std::ostream&, const CUDA_Static_Dict&);
 
 };
 
 template <typename TKey, typename TVal>
-std::ostream &operator << (std::ostream &os, const CUDA_Dict<TKey, TVal> &d) {
+std::ostream &operator << (std::ostream &os, const CUDA_Static_Dict<TKey, TVal> &d) {
 	std::vector<Tuple<TKey, TVal>> dict_data;
 	dict_data = d.dump_data();
 
-	os << "{ CUDA_Dict" << std::endl;
+	os << "{ CUDA_Static_Dict" << std::endl;
 	for (int i = 0; i < dict_data.size(); i++) {
 		auto elem = dict_data[i];
 		auto [k, v] = elem;
@@ -399,6 +399,29 @@ std::ostream &operator << (std::ostream &os, const CUDA_Dict<TKey, TVal> &d) {
 	os << "}" << std::endl;
 	return os;
 }
+
+
+template <typename T>
+struct Vector {
+	T p;
+};
+
+template <typename TKeyElem, typename TVal>
+struct CUDA_Indexed_Dict;
+
+
+
+template <typename TKeyElem, typename TVal>
+struct CUDA_Indexed_Dict {
+	uint32_t keylen;
+	
+	CUDA_Indexed_Dict() = default;
+	CUDA_Indexed_Dict(int keylen, const Tuple<Vector<TKeyElem>, TVal> &items) {
+
+	}
+};
+
+
 #pragma pack(pop)
 
 #endif  // __CUDA_DICT_H__
