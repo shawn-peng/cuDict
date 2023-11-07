@@ -1,0 +1,57 @@
+
+#pragma once
+
+#include <cstdint>
+#include <iostream>
+
+template<typename TArr>
+struct Array;
+
+template<typename TArr> // declaration
+std::ostream& operator<<(std::ostream&, const Array<TArr>&);
+
+template<typename TArr>
+struct Array {
+	TArr arr;
+	using check = decltype(is_array(arr));
+	using T = decltype(array_elem(arr));
+	static const int32_t L;
+
+	__device__ __host__ Array() : arr{0} {}
+	__device__ __host__ Array(T x) : arr{x} {}
+	__device__ __host__ Array(const TArr &other) {
+		memcpy(arr, other, sizeof(arr));
+	}
+	__device__ __host__ Array(const Array &other) {
+		memcpy(arr, other.arr, sizeof(arr));
+	}
+	__device__ __host__ Array &operator =(const TArr &other) {
+		memcpy(arr, other, sizeof(arr));
+		return *this;
+	}
+	__device__ __host__ Array &operator =(const Array &other) {
+		memcpy(arr, other.arr, sizeof(arr));
+		return *this;
+	}
+	friend std::ostream& operator<< <>(std::ostream& os, const Array<TArr>& a);
+};
+
+template <typename TArr>
+const int32_t Array<TArr>::L = array_len(Array<TArr>().arr);
+
+template<typename T, uint32_t L>
+void is_array(T (&x)[L]);
+template<typename T, uint32_t L>
+T array_elem(T (&x)[L]);
+template<typename T, uint32_t L>
+constexpr uint32_t __device__ __host__ array_len(T (&x)[L]) {return L;}
+
+template<typename TArr>
+std::ostream& operator<<(std::ostream& os, const Array<TArr>& a) {
+	os << "(";
+	for (int i = 0; i < LEN(a.arr); i++) {
+		os << a.arr[i] << ", ";
+	}
+	os << ")";
+	return os;
+}

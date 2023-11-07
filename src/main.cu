@@ -28,7 +28,9 @@ int main() {
         {{4, 5, 6}, 6},
         {{5, 5, 7}, 7},
         {{6, 9, 8}, 8}};
-    auto d = CUDA_Static_Dict(dict_data, {Sentinel, Sentinel, (uint16_t)Sentinel}, Sentinel);
+    auto d = CUDA_Static_Dict(dict_data);
+
+    // auto d = CUDA_Static_Dict(dict_data, {Sentinel, Sentinel, (uint16_t)Sentinel}, Sentinel);
     std::cout << d;
 
     auto flags = d.contains_items({

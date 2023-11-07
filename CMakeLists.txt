@@ -16,6 +16,11 @@ add_library(cuda_dict src/cuda_dict.cu)
 set_target_properties(cuda_dict PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET cuda_dict PROPERTY CUDA_ARCHITECTURES 70 80)
 
+add_executable(benchmark benchmark/benchmark.cu)
+set_target_properties(benchmark PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_property(TARGET benchmark PROPERTY CUDA_ARCHITECTURES 70 80)
+
 
 target_link_libraries(mymain cuda_dict)
+target_link_libraries(benchmark cuda_dict)
 

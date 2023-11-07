@@ -84,6 +84,10 @@ template<typename T, typename ... Rest>
 class Tuple<T, Rest...>
 {
 public:
+    __host__ __device__ Tuple(const T& one)
+    {
+        Tuple(one, Rest(one) ...);
+    }
     __host__ __device__ Tuple(const T& first, const Rest& ... rest)
         : first(first)
         , rest(rest...)

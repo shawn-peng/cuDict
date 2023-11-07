@@ -19,10 +19,10 @@ namespace cg = cooperative_groups;
 
 
 template <typename TKey, typename TVal>
-struct CUDA_Dict;
+struct CUDA_Static_Dict;
 
 template<typename TKey, typename TVal> // declaration
-std::ostream& operator<<(std::ostream&, const CUDA_Dict<TKey, TVal>&);
+std::ostream& operator<<(std::ostream&, const CUDA_Static_Dict<TKey, TVal>&);
 
 
 __device__ extern uint32_t prime_factors[5];
@@ -319,7 +319,7 @@ struct CUDA_Static_Dict {
 	TVal sentinel_val;
 	
 	CUDA_Static_Dict(const std::vector<TItem> &data,
-			TKey sentinel_key, TVal sentinel_val)
+			TKey sentinel_key = TKey(-1), TVal sentinel_val = TVal(-1))
 	: sentinel_key(sentinel_key), sentinel_val(sentinel_val) {
 		auto n = data.size();
 		this->size = n;

@@ -35,7 +35,7 @@ struct CUDA_Static_Dict {
 	TVal sentinel_val;
 	
 	CUDA_Static_Dict(const std::vector<TItem> &data,
-			TKey sentinel_key, TVal sentinel_val);
+			TKey sentinel_key = TKey(-1), TVal sentinel_val = TVal(-1));
 	void update(const std::vector<TItem> &data);
 	auto dump_data() const;
 	auto contains_items(const std::vector<TKey> &keys);
